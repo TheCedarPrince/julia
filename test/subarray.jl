@@ -134,8 +134,8 @@ end
 function test_bounds(@nospecialize(A))
     @test_throws BoundsError A[0]
     @test_throws BoundsError A[end+1]
-    trailing2 = ntuple(x->1, max(ndims(A)-2, 0))
-    trailing3 = ntuple(x->1, max(ndims(A)-3, 0))
+    trailing2 = ntuple(Returns(1), max(ndims(A)-2, 0))
+    trailing3 = ntuple(Returns(1), max(ndims(A)-3, 0))
     @test_throws BoundsError A[1, 0, trailing2...]
     @test_throws BoundsError A[1, end+1, trailing2...]
     @test_throws BoundsError A[1, 1, 0, trailing3...]
@@ -214,10 +214,10 @@ end
 function runviews(SB::AbstractArray, indexN, indexNN, indexNNN)
     @assert ndims(SB) > 2
     for i3 in indexN, i2 in indexN, i1 in indexN
-        runsubarraytests(SB, i1, i2, i3, ntuple(x->1, max(ndims(SB)-3, 0))...)
+        runsubarraytests(SB, i1, i2, i3, ntuple(Returns(1), max(ndims(SB)-3, 0))...)
     end
     for i2 in indexN, i1 in indexN
-        runsubarraytests(SB, i1, i2, ntuple(x->1, max(ndims(SB)-2, 0))...)
+        runsubarraytests(SB, i1, i2, ntuple(Returns(1), max(ndims(SB)-2, 0))...)
     end
     for i1 in indexNNN
         runsubarraytests(SB, i1)
@@ -656,6 +656,33 @@ end
     @test _test_27632(view(ones(Int64, (1, 1, 1)), 1, 1, 1)) === nothing
 end
 
+@testset "issue #37199: 1-d views with offset range indices" begin
+    b = zeros(6, 3)
+    b[Base.IdentityUnitRange(4:6), 2] .= 3
+    @test b == [zeros(6, 1) [0,0,0,3,3,3] zeros(6,1)]
+    b[4, Base.IdentityUnitRange(2:3)] .= 4
+    @test b == [zeros(6,1) [0,0,0,4,3,3] [0,0,0,4,0,0]]
+    b[Base.IdentityUnitRange(2:3), :] .= 5
+    @test b == [zeros(1, 3); fill(5, 2, 3); [zeros(3) [4,3,3] [4,0,0]]]
+    b[:, Base.IdentityUnitRange(3:3)] .= 6
+    @test b == [[zeros(1, 2); fill(5, 2, 2); [zeros(3) [4,3,3]]] fill(6, 6)]
+
+    A = reshape(1:5*7*11, 11, 7, 5)
+    inds = (1:4, 2:5, 2, :, fill(3))
+    offset(x) = x
+    offset(r::UnitRange) = Base.IdentityUnitRange(r)
+    for i1 in inds
+        for i2 in inds
+            for i3 in inds
+                vo = @view A[offset(i1), offset(i2), offset(i3)]
+                v = @view A[i1, i2, i3]
+                @test first(vo) == first(v) == first(A[i1, i2, i3])
+                @test collect(A[i1, i2, i3]) == collect(vo) == collect(v)
+            end
+        end
+    end
+end
+
 @testset "issue #29608; contiguousness" begin
     @test Base.iscontiguous(view(ones(1), 1))
     @test Base.iscontiguous(view(ones(10), 1:10))
@@ -670,4 +697,24 @@ import InteractiveUtils
     @test M isa StridedArray
     @test M*v == copy(M)*v
     @test (InteractiveUtils.@which M*v) == (InteractiveUtils.@which copy(M)*v)
+end
+
+
+isdefined(Main, :InfiniteArrays) || @eval Main include("testhelpers/InfiniteArrays.jl")
+using .Main.InfiniteArrays, Base64
+
+@testset "PR #37741: non-Int sizes" begin
+    r = BigInt(1):BigInt(100_000_000)^100
+    v = SubArray(r, (r,))
+    @test size(v) == (last(r),)
+
+    v = SubArray(OneToInf(), (OneToInf(),))
+    @test size(v) == (Infinity(),)
+    @test stringmime("text/plain", v; context=(:limit => true)) == "$(Infinity())-element view(::$(OneToInf{Int}), 1:1:$(Infinity())) with eltype $Int with indices 1:1:$(Infinity()):\n  1\n  2\n  3\n  4\n  5\n  6\n  7\n  8\n  9\n 10\n  ⋮"
+end
+
+@testset "PR #39809: copy on 0-dimensional SubArray" begin
+    v = [[1]]
+    s = @view v[1]
+    @test copy(s) == fill([1])
 end

@@ -40,7 +40,8 @@ up front are:
   * There is no meaningful concept of a "compile-time type": the only type a value has is its actual
     type when the program is running. This is called a "run-time type" in object-oriented languages
     where the combination of static compilation with polymorphism makes this distinction significant.
-  * Only values, not variables, have types -- variables are simply names bound to values.
+  * Only values, not variables, have types -- variables are simply names bound to values, although for
+    simplicity we may say "type of a variable" as shorthand for "type of the value to which a variable refers".
   * Both abstract and concrete types can be parameterized by other types. They can also be parameterized
     by symbols, by values of any type for which [`isbits`](@ref) returns true (essentially, things
     like numbers and bools that are stored like C types or `struct`s with no pointers to other objects),
@@ -874,7 +875,7 @@ tuple type is generated on demand:
 
 ```jldoctest
 julia> typeof((1,"foo",2.5))
-Tuple{Int64,String,Float64}
+Tuple{Int64, String, Float64}
 ```
 
 Note the implications of covariance:
@@ -895,12 +896,12 @@ signature (when the signature matches).
 
 ### Vararg Tuple Types
 
-The last parameter of a tuple type can be the special type [`Vararg`](@ref), which denotes any number
+The last parameter of a tuple type can be the special value [`Vararg`](@ref), which denotes any number
 of trailing elements:
 
 ```jldoctest
 julia> mytupletype = Tuple{AbstractString,Vararg{Int}}
-Tuple{AbstractString,Vararg{Int64,N} where N}
+Tuple{AbstractString, Vararg{Int64}}
 
 julia> isa(("1",), mytupletype)
 true
@@ -915,10 +916,11 @@ julia> isa(("1",1,2,3.0), mytupletype)
 false
 ```
 
-Notice that `Vararg{T}` corresponds to zero or more elements of type `T`. Vararg tuple types are
+Moreover `Vararg{T}` corresponds to zero or more elements of type `T`. Vararg tuple types are
 used to represent the arguments accepted by varargs methods (see [Varargs Functions](@ref)).
 
-The type `Vararg{T,N}` corresponds to exactly `N` elements of type `T`.  `NTuple{N,T}` is a convenient
+The special value `Vararg{T,N}` (when used as the last parameter of a tuple type)
+corresponds to exactly `N` elements of type `T`.  `NTuple{N,T}` is a convenient
 alias for `Tuple{Vararg{T,N}}`, i.e. a tuple type containing exactly `N` elements of type `T`.
 
 ### Named Tuple Types
@@ -928,7 +930,7 @@ symbols giving the field names, and a tuple type giving the field types.
 
 ```jldoctest
 julia> typeof((a=1,b="hello"))
-NamedTuple{(:a, :b),Tuple{Int64,String}}
+NamedTuple{(:a, :b), Tuple{Int64, String}}
 ```
 
 The [`@NamedTuple`](@ref) macro provides a more convenient `struct`-like syntax for declaring
@@ -936,13 +938,13 @@ The [`@NamedTuple`](@ref) macro provides a more convenient `struct`-like syntax 
 
 ```jldoctest
 julia> @NamedTuple{a::Int, b::String}
-NamedTuple{(:a, :b),Tuple{Int64,String}}
+NamedTuple{(:a, :b), Tuple{Int64, String}}
 
 julia> @NamedTuple begin
            a::Int
            b::String
        end
-NamedTuple{(:a, :b),Tuple{Int64,String}}
+NamedTuple{(:a, :b), Tuple{Int64, String}}
 ```
 
 A `NamedTuple` type can be used as a constructor, accepting a single tuple argument.
@@ -1031,11 +1033,11 @@ The `where` keyword itself can be nested inside a more complex declaration. For 
 consider the two types created by the following declarations:
 
 ```jldoctest
-julia> const T1 = Array{Array{T,1} where T, 1}
-Vector{Vector{T} where T} = Array{Array{T,1} where T,1}
+julia> const T1 = Array{Array{T, 1} where T, 1}
+Vector{Vector} (alias for Array{Array{T, 1} where T, 1})
 
-julia> const T2 = Array{Array{T,1}, 1} where T
-Array{Vector{T},1} where T
+julia> const T2 = Array{Array{T, 1}, 1} where T
+Array{Vector{T}, 1} where T
 ```
 
 Type `T1` defines a 1-dimensional array of 1-dimensional arrays; each
@@ -1047,7 +1049,7 @@ There is a convenient syntax for naming such types, similar to the short form of
 definition syntax:
 
 ```julia
-Vector{T} = Array{T,1}
+Vector{T} = Array{T, 1}
 ```
 
 This is equivalent to `const Vector = Array{T,1} where T`.

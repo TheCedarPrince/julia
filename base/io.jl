@@ -15,7 +15,7 @@ struct EOFError <: Exception end
 A system call failed with an error code (in the `errno` global variable).
 """
 struct SystemError <: Exception
-    prefix::AbstractString
+    prefix::String
     errnum::Int32
     extrainfo
     SystemError(p::AbstractString, e::Integer, extrainfo) = new(p, e, extrainfo)
@@ -73,8 +73,8 @@ data has already been buffered. The result is a `Vector{UInt8}`.
 
 !!! warning
     The amount of data returned is implementation-dependent; for example it can
-depend on the internal choice of buffer size. Other functions such as [`read`](@ref)
-should generally be used instead.
+    depend on the internal choice of buffer size. Other functions such as [`read`](@ref)
+    should generally be used instead.
 """
 function readavailable end
 
@@ -136,7 +136,7 @@ Note that Julia does not convert the endianness for you. Use [`ntoh`](@ref) or
 
     read(io::IO, String)
 
-Read the entirety of `io`, as a `String`.
+Read the entirety of `io`, as a `String` (see also [`readchomp`](@ref)).
 
 # Examples
 ```jldoctest
@@ -258,13 +258,13 @@ end
 
 function peek(s::IO, ::Type{T}) where T
     mark(s)
-    try read(s, T)
+    try read(s, T)::T
     finally
         reset(s)
     end
 end
 
-peek(s) = peek(s, UInt8)
+peek(s) = peek(s, UInt8)::UInt8
 
 # Generic `open` methods
 
@@ -307,7 +307,7 @@ function open_flags(;
 end
 
 """
-    open(f::Function, args...; kwargs....)
+    open(f::Function, args...; kwargs...)
 
 Apply the function `f` to the result of `open(args...; kwargs...)` and close the resulting file
 descriptor upon completion.
@@ -358,11 +358,12 @@ function pipe_reader end
 function pipe_writer end
 
 write(io::AbstractPipe, byte::UInt8) = write(pipe_writer(io)::IO, byte)
-unsafe_write(io::AbstractPipe, p::Ptr{UInt8}, nb::UInt) = unsafe_write(pipe_writer(io)::IO, p, nb)
+write(to::IO, from::AbstractPipe) = write(to, pipe_reader(from))
+unsafe_write(io::AbstractPipe, p::Ptr{UInt8}, nb::UInt) = unsafe_write(pipe_writer(io)::IO, p, nb)::Union{Int,UInt}
 buffer_writes(io::AbstractPipe, args...) = buffer_writes(pipe_writer(io)::IO, args...)
 flush(io::AbstractPipe) = flush(pipe_writer(io)::IO)
 
-read(io::AbstractPipe, byte::Type{UInt8}) = read(pipe_reader(io)::IO, byte)
+read(io::AbstractPipe, byte::Type{UInt8}) = read(pipe_reader(io)::IO, byte)::UInt8
 unsafe_read(io::AbstractPipe, p::Ptr{UInt8}, nb::UInt) = unsafe_read(pipe_reader(io)::IO, p, nb)
 read(io::AbstractPipe) = read(pipe_reader(io)::IO)
 readuntil(io::AbstractPipe, arg::UInt8; kw...) = readuntil(pipe_reader(io)::IO, arg; kw...)
@@ -379,7 +380,7 @@ for f in (
         :readavailable, :isreadable)
     @eval $(f)(io::AbstractPipe) = $(f)(pipe_reader(io)::IO)
 end
-peek(io::AbstractPipe, ::Type{T}) where {T} = peek(pipe_reader(io)::IO, T)
+peek(io::AbstractPipe, ::Type{T}) where {T} = peek(pipe_reader(io)::IO, T)::T
 
 iswritable(io::AbstractPipe) = iswritable(pipe_writer(io)::IO)
 isopen(io::AbstractPipe) = isopen(pipe_writer(io)::IO) || isopen(pipe_reader(io)::IO)
@@ -401,6 +402,7 @@ julia> bytesavailable(io)
 ```
 """
 bytesavailable(io::AbstractPipe) = bytesavailable(pipe_reader(io)::IO)
+bytesavailable(io::DevNull) = 0
 
 """
     eof(stream) -> Bool
@@ -707,7 +709,7 @@ end
 
 function write(io::IO, s::Symbol)
     pname = unsafe_convert(Ptr{UInt8}, s)
-    return unsafe_write(io, pname, Int(ccall(:strlen, Csize_t, (Cstring,), pname)))
+    return unsafe_write(io, pname, ccall(:strlen, Csize_t, (Cstring,), pname))
 end
 
 function write(to::IO, from::IO)
@@ -747,14 +749,14 @@ function read!(s::IO, a::AbstractArray{T}) where T
 end
 
 function read(io::IO, ::Type{Char})
-    b0 = read(io, UInt8)
+    b0 = read(io, UInt8)::UInt8
     l = 8(4-leading_ones(b0))
     c = UInt32(b0) << 24
     if l < 24
         s = 16
-        while s ≥ l && !eof(io)
+        while s ≥ l && !eof(io)::Bool
             peek(io) & 0xc0 == 0x80 || break
-            b = read(io, UInt8)
+            b = read(io, UInt8)::UInt8
             c |= UInt32(b) << s
             s -= 8
         end
@@ -773,8 +775,7 @@ function readuntil(s::IO, delim::AbstractChar; keep::Bool=false)
         return readuntil_string(s, delim % UInt8, keep)
     end
     out = IOBuffer()
-    while !eof(s)
-        c = read(s, Char)
+    for c in readeach(s, Char)
         if c == delim
             keep && write(out, c)
             break
@@ -786,8 +787,7 @@ end
 
 function readuntil(s::IO, delim::T; keep::Bool=false) where T
     out = (T === UInt8 ? StringVector(0) : Vector{T}())
-    while !eof(s)
-        c = read(s, T)
+    for c in readeach(s, T)
         if c == delim
             keep && push!(out, c)
             break
@@ -823,8 +823,7 @@ function readuntil_vector!(io::IO, target::AbstractVector{T}, keep::Bool, out) w
     max_pos = 1 # array-offset in cache
     local cache # will be lazy initialized when needed
     output! = (isa(out, IO) ? write : push!)
-    while !eof(io)
-        c = read(io, T)
+    for c in readeach(io, T)
         # Backtrack until the next target character matches what was found
         while true
             c1 = target[pos + first]
@@ -990,6 +989,8 @@ retained. When called with a file name, the file is opened once at the beginning
 iteration and closed at the end. If iteration is interrupted, the file will be
 closed when the `EachLine` object is garbage collected.
 
+To iterate over each line of a `String`, `eachline(IOBuffer(str))` can be used.
+
 # Examples
 ```jldoctest
 julia> open("my_file.txt", "w") do io
@@ -1021,6 +1022,44 @@ end
 eltype(::Type{<:EachLine}) = String
 
 IteratorSize(::Type{<:EachLine}) = SizeUnknown()
+
+isdone(itr::EachLine, state...) = eof(itr.stream)
+
+struct ReadEachIterator{T, IOT <: IO}
+    stream::IOT
+end
+
+"""
+    readeach(io::IO, T)
+
+Return an iterable object yielding [`read(io, T)`](@ref).
+
+See also [`skipchars`](@ref), [`eachline`](@ref), [`readuntil`](@ref).
+
+!!! compat "Julia 1.6"
+    `readeach` requires Julia 1.6 or later.
+
+# Examples
+```jldoctest
+julia> io = IOBuffer("JuliaLang is a GitHub organization.\\n It has many members.\\n");
+
+julia> for c in readeach(io, Char)
+           c == '\\n' && break
+           print(c)
+       end
+JuliaLang is a GitHub organization.
+```
+"""
+readeach(stream::IOT, T::Type) where IOT<:IO = ReadEachIterator{T,IOT}(stream)
+
+iterate(itr::ReadEachIterator{T}, state=nothing) where T =
+    eof(itr.stream) ? nothing : (read(itr.stream, T), nothing)
+
+eltype(::Type{ReadEachIterator{T}}) where T = T
+
+IteratorSize(::Type{<:ReadEachIterator}) = SizeUnknown()
+
+isdone(itr::ReadEachIterator, state...) = eof(itr.stream)
 
 # IOStream Marking
 # Note that these functions expect that io.mark exists for
@@ -1106,8 +1145,7 @@ julia> String(readavailable(buf))
 ```
 """
 function skipchars(predicate, io::IO; linecomment=nothing)
-    while !eof(io)
-        c = read(io, Char)
+    for c in readeach(io, Char)
         if c === linecomment
             readline(io)
         elseif !predicate(c)
@@ -1126,6 +1164,8 @@ pass the filename as the first argument. EOL markers other than `'\\n'` are supp
 passing them as the second argument.  The last non-empty line of `io` is counted even if it does not
 end with the EOL, matching the length returned by [`eachline`](@ref) and [`readlines`](@ref).
 
+To count lines of a `String`, `countlines(IOBuffer(str))` can be used.
+
 # Examples
 ```jldoctest
 julia> io = IOBuffer("JuliaLang is a GitHub organization.\\n");
@@ -1138,8 +1178,13 @@ julia> io = IOBuffer("JuliaLang is a GitHub organization.");
 julia> countlines(io)
 1
 
+julia> eof(io) # counting lines moves the file pointer
+true
+
+julia> io = IOBuffer("JuliaLang is a GitHub organization.");
+
 julia> countlines(io, eol = '.')
-0
+1
 ```
 """
 function countlines(io::IO; eol::AbstractChar='\n')

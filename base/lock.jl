@@ -1,19 +1,36 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
+const ThreadSynchronizer = GenericCondition{Threads.SpinLock}
+
 # Advisory reentrant lock
 """
     ReentrantLock()
 
-Creates a re-entrant lock for synchronizing [`Task`](@ref)s.
-The same task can acquire the lock as many times as required.
-Each [`lock`](@ref) must be matched with an [`unlock`](@ref).
+Creates a re-entrant lock for synchronizing [`Task`](@ref)s. The same task can
+acquire the lock as many times as required. Each [`lock`](@ref) must be matched
+with an [`unlock`](@ref).
+
+Calling 'lock' will also inhibit running of finalizers on that thread until the
+corresponding 'unlock'. Use of the standard lock pattern illustrated below
+should naturally be supported, but beware of inverting the try/lock order or
+missing the try block entirely (e.g. attempting to return with the lock still
+held):
+
+```
+lock(l)
+try
+    <atomic work>
+finally
+    unlock(l)
+end
+```
 """
 mutable struct ReentrantLock <: AbstractLock
     locked_by::Union{Task, Nothing}
-    cond_wait::GenericCondition{Threads.SpinLock}
+    cond_wait::ThreadSynchronizer
     reentrancy_cnt::Int
 
-    ReentrantLock() = new(nothing, GenericCondition{Threads.SpinLock}(), 0)
+    ReentrantLock() = new(nothing, ThreadSynchronizer(), 0)
 end
 
 assert_havelock(l::ReentrantLock) = assert_havelock(l, l.locked_by)
@@ -48,6 +65,7 @@ function trylock(rl::ReentrantLock)
     if rl.reentrancy_cnt == 0
         rl.locked_by = t
         rl.reentrancy_cnt = 1
+        GC.disable_finalizers()
         got = true
     else
         got = false
@@ -75,6 +93,7 @@ function lock(rl::ReentrantLock)
             if rl.reentrancy_cnt == 0
                 rl.locked_by = t
                 rl.reentrancy_cnt = 1
+                GC.disable_finalizers()
                 break
             end
             try
@@ -116,6 +135,7 @@ function unlock(rl::ReentrantLock)
                 rethrow()
             end
         end
+        GC.enable_finalizers()
         unlock(rl.cond_wait)
     end
     return
@@ -137,6 +157,7 @@ function unlockall(rl::ReentrantLock)
             rethrow()
         end
     end
+    GC.enable_finalizers()
     unlock(rl.cond_wait)
     return n
 end
@@ -180,6 +201,22 @@ function trylock(f, l::AbstractLock)
     return false
 end
 
+"""
+    @lock l expr
+
+Macro version of `lock(f, l::AbstractLock)` but with `expr` instead of `f` function.
+Expands to:
+```julia
+lock(l)
+try
+    expr
+finally
+    unlock(l)
+end
+```
+This is similar to using [`lock`](@ref) with a `do` block, but avoids creating a closure
+and thus can improve the performance.
+"""
 macro lock(l, expr)
     quote
         temp = $(esc(l))
@@ -192,6 +229,13 @@ macro lock(l, expr)
     end
 end
 
+"""
+    @lock_nofail l expr
+
+Equivalent to `@lock l expr` for cases in which we can guarantee that the function
+will not throw any error. In this case, avoiding try-catch can improve the performance.
+See [`@lock`](@ref).
+"""
 macro lock_nofail(l, expr)
     quote
         temp = $(esc(l))
@@ -232,16 +276,14 @@ end
     """
     Special note for [`Threads.Condition`](@ref):
 
-    The caller must be holding the [`lock`](@ref) that owns `c` before calling this method.
+    The caller must be holding the [`lock`](@ref) that owns a `Threads.Condition` before calling this method.
     The calling task will be blocked until some other task wakes it,
-    usually by calling [`notify`](@ref) on the same Condition object.
+    usually by calling [`notify`](@ref) on the same `Threads.Condition` object.
     The lock will be atomically released when blocking (even if it was locked recursively),
     and will be reacquired before returning.
     """
     wait(c::Condition)
 end
-
-const ThreadSynchronizer = GenericCondition{Threads.SpinLock}
 
 """
     Semaphore(sem_size)

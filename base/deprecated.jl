@@ -76,12 +76,12 @@ macro deprecate(old, new, ex=true)
     end
 end
 
-function depwarn(msg, funcsym)
+function depwarn(msg, funcsym; force::Bool=false)
     opts = JLOptions()
     if opts.depwarn == 2
         throw(ErrorException(msg))
     end
-    deplevel = opts.depwarn == 1 ? CoreLogging.Warn : CoreLogging.BelowMinLevel
+    deplevel = force || opts.depwarn == 1 ? CoreLogging.Warn : CoreLogging.BelowMinLevel
     @logmsg(
         deplevel,
         msg,
@@ -117,12 +117,14 @@ function firstcaller(bt::Vector, funcsyms)
             end
             found = lkup.func in funcsyms
             # look for constructor type name
-            if !found && lkup.linfo isa Core.MethodInstance
+            if !found
                 li = lkup.linfo
-                ft = ccall(:jl_first_argument_datatype, Any, (Any,), li.def.sig)
-                if isa(ft, DataType) && ft.name === Type.body.name
-                    ft = unwrap_unionall(ft.parameters[1])
-                    found = (isa(ft, DataType) && ft.name.name in funcsyms)
+                if li isa Core.MethodInstance
+                    ft = ccall(:jl_first_argument_datatype, Any, (Any,), (li.def::Method).sig)
+                    if isa(ft, DataType) && ft.name === Type.body.name
+                        ft = unwrap_unionall(ft.parameters[1])
+                        found = (isa(ft, DataType) && ft.name.name in funcsyms)
+                    end
                 end
             end
         end
@@ -229,5 +231,26 @@ function tuple_type_cons(::Type{S}, ::Type{T}) where T<:Tuple where S
     @_pure_meta
     Tuple{S, T.parameters...}
 end
+function parameter_upper_bound(t::UnionAll, idx)
+    @_pure_meta
+    return rewrap_unionall((unwrap_unionall(t)::DataType).parameters[idx], t)
+end
+
+# these were internal functions, but some packages seem to be relying on them
+@deprecate cat_shape(dims, shape::Tuple{}, shapes::Tuple...) cat_shape(dims, shapes) false
+cat_shape(dims, shape::Tuple{}) = () # make sure `cat_shape(dims, ())` do not recursively calls itself
 
 # END 1.6 deprecations
+
+# BEGIN 1.7 deprecations
+
+# the plan is to eventually overload getproperty to access entries of the dict
+@noinline function getproperty(x::Pairs, s::Symbol)
+    depwarn("use values(kwargs) and keys(kwargs) instead of kwargs.data and kwargs.itr", :getproperty, force=true)
+    return getfield(x, s)
+end
+
+# This function was marked as experimental and not exported.
+@deprecate catch_stack(task=current_task(); include_bt=true) current_exceptions(task; backtrace=include_bt) false
+
+# END 1.7 deprecations
